@@ -1,0 +1,53 @@
+name: Docker CD
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+env:
+  APP_NAME: nodejs-app
+  IMAGE_TAR: nodejs-app.tar.gz
+  EC2_DEPLOY_DIR: /tmp/nodejs-app-deploy
+
+jobs:
+  deploy:
+    name: Deploy Docker image to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t "$APP_NAME:${{ github.sha }}" -t "$APP_NAME:latest" .
+
+      - name: Verify Node.js in image
+        run: docker run --rm "$APP_NAME:${{ github.sha }}" node -v
+
+      - name: Save Docker image
+        run: docker save "$APP_NAME:${{ github.sha }}" "$APP_NAME:latest" | gzip > "$IMAGE_TAR"
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -p "${{ secrets.EC2_PORT || 22 }}" "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copy image to EC2
+        run: |
+          ssh -i ~/.ssh/ec2_key -p "${{ secrets.EC2_PORT || 22 }}" "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" "mkdir -p '$EC2_DEPLOY_DIR'"
+          scp -i ~/.ssh/ec2_key -P "${{ secrets.EC2_PORT || 22 }}" "$IMAGE_TAR" "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:$EC2_DEPLOY_DIR/$IMAGE_TAR"
+
+      - name: Deploy container on EC2
+        run: |
+          ssh -i ~/.ssh/ec2_key -p "${{ secrets.EC2_PORT || 22 }}" "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" << EOF
+            set -e
+            cd "$EC2_DEPLOY_DIR"
+            sudo docker load -i "$IMAGE_TAR"
+            sudo docker rm -f "$APP_NAME" || true
+            sudo docker run -d --restart unless-stopped --name "$APP_NAME" "$APP_NAME:${{ github.sha }}"
+            sudo docker image prune -f
+          EOF
