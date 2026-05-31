@@ -1,0 +1,39 @@
+name: Docker CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+env:
+  IMAGE_NAME: nodejs-app
+  CONTAINER_NAME: nodejs-test
+
+jobs:
+  docker:
+    name: Build and verify Docker image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t "$IMAGE_NAME" .
+
+      - name: Run container
+        run: |
+          docker rm -f "$CONTAINER_NAME" || true
+          docker run -d --name "$CONTAINER_NAME" "$IMAGE_NAME" tail -f /dev/null
+
+      - name: Verify Node.js in container
+        run: docker exec "$CONTAINER_NAME" node -v
+
+      - name: Cleanup container
+        if: always()
+        run: docker rm -f "$CONTAINER_NAME" || true
